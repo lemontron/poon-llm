@@ -1,0 +1,13 @@
+{
+  "name": "poon-llm",
+  "keywords": ["llm", "chatgpt", "claude", "ollama", "anthropic"],
+  "type": "module",
+  "version": "1.0.0",
+  "description": "Connect to and stream from any OpenAI/Anthropic API",
+  "main": "index.js",
+  "scripts": {
+    "publish": "npm publish"
+  },
+  "author": "James Loper",
+  "license": "ISC"
+}
