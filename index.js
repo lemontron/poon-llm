@@ -12,6 +12,15 @@ const parseLine = (buf) => {
 	}
 };
 
+const consumeStreamAsync = (stream, onLine) => new Promise(resolve => {
+	const rl = readline.createInterface({'input': stream});
+	rl.on('line', buf => {
+		const delta = parseLine(buf);
+		if (delta) onLine(delta);
+	});
+	rl.once('close', resolve);
+});
+
 // Use the correct request method based on the URL protocol
 const request = (url, ...rest) => {
 	if (url.protocol === 'http:') return http.request(url, ...rest);
@@ -98,53 +107,47 @@ class LLM {
 		};
 		if (maxTokens) payload.max_tokens = maxTokens;
 		if (json) payload.response_format = {'type': 'json_object'};
-
 		if (this.protocol === 'anthropic') {
 			if (this.systemPrompt) payload.system = this.systemPrompt;
 		}
 
-		const url = this._getChatUrl();
-		const client = request(url, {
+		// Logs the error message in JSON or plain text as a fallback
+		const handleError = (res) => {
+			let body = '';
+			res.on('data', buf => body += buf.toString());
+			res.on('end', () => {
+				try {
+					const data = JSON.parse(body);
+					console.warn('[LLM Error]', res.statusCode, data);
+				} catch (err) {
+					console.warn('[LLM Error]', res.statusCode, body);
+				}
+			});
+		};
+
+		const client = request(this._getChatUrl(), {
 			'method': 'POST',
 			'headers': this.headers,
 		}, res => {
-			if (res.statusCode >= 400) {
-				let body = '';
-				res.on('data', buf => body += buf.toString());
-				res.on('end', () => {
-					try { // Display the error message in JSON or plain text as a fallback
-						const data = JSON.parse(body);
-						console.warn('[LLM Error]', res.statusCode, data);
-					} catch (err) {
-						console.warn('[LLM Error]', res.statusCode, body);
-					}
-				});
-			} else {
-				let msg = prefill; // The chat string
-				let chain = Promise.resolve();
+			if (res.statusCode >= 400) return handleError(res);
 
-				const rl = readline.createInterface({'input': res});
-				rl.on('line', buf => {
-					const delta = parseLine(buf);
-					if (delta) {
-						// console.log(delta);
-						msg += delta;
-						const currentResponse = msg;
-						if (onUpdate) chain = chain.then(async () => {
-							if (currentResponse !== msg) {
-								console.log('==> callback');
-								await onUpdate(msg);
-							}
-						});
-					}
+			let msg = prefill, isUpdating = false, chain = Promise.resolve();
+
+			let count = 0;
+			consumeStreamAsync(res, delta => {
+				msg += delta;
+				if (onUpdate && !isUpdating) chain = chain.then(async () => {
+					count++;
+					// console.log('updates=', count);
+					isUpdating = true;
+					await onUpdate(msg);
+					setTimeout(() => isUpdating = false, 150);
 				});
-				rl.once('close', () => {
-					chain.then(() => {
-						// console.log('FINAL:', msg);
-						finalResponse(msg);
-					});
+			}).then(() => {
+				chain.then(() => {
+					finalResponse(msg);
 				});
-			}
+			});
 		});
 
 		client.on('error', reject); // Handle errors
