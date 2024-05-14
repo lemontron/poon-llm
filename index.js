@@ -48,7 +48,7 @@ class LLM {
 		if (this.protocol === 'anthropic') return new URL('/v1/messages', this.apiBase);
 	};
 
-	_createMessages = (prompt, context = []) => {
+	_createMessages = (prompt, context = [], prefill) => {
 		const messages = [];
 		if (this.protocol === 'openai') messages.push({'role': 'system', 'content': this.systemPrompt});
 
@@ -62,15 +62,21 @@ class LLM {
 		});
 
 		messages.push({'role': 'user', 'content': prompt});
+		if (prefill) messages.push({'role': 'assistant', 'content': prefill});
 		return messages;
 	};
 
-	chat = (prompt, opts = {}) => new Promise((resolve, reject) => {
-		const {json, context = [], maxTokens, temperature = 0.7, onUpdate} = opts;
+	chat = (prompt, {
+		json,
+		context = [],
+		maxTokens,
+		temperature = 0.7,
+		onUpdate,
+		prefill = '',
+	} = {}) => new Promise((resolve, reject) => {
 
-		// Prefer chatUrl if set
-		const url = this._getChatUrl();
-		const finalResponse = (response) => {
+		const finalResponse = async (response) => {
+			if (onUpdate) await onUpdate(response);
 			if (json) {
 				try {
 					resolve(JSON.parse(response));
@@ -88,17 +94,20 @@ class LLM {
 			'model': this.model,
 			'temperature': temperature,
 			'stream': true,
-			'messages': this._createMessages(prompt, context),
+			'messages': this._createMessages(prompt, context, prefill),
 		};
 		if (maxTokens) payload.max_tokens = maxTokens;
 		if (json) payload.response_format = {'type': 'json_object'};
 
 		if (this.protocol === 'anthropic') {
 			if (this.systemPrompt) payload.system = this.systemPrompt;
-			payload.max_tokens = this.maxTokens;
 		}
 
-		const client = request(url, {'method': 'POST', 'headers': this.headers}, res => {
+		const url = this._getChatUrl();
+		const client = request(url, {
+			'method': 'POST',
+			'headers': this.headers,
+		}, res => {
 			if (res.statusCode >= 400) {
 				let body = '';
 				res.on('data', buf => body += buf.toString());
@@ -111,27 +120,27 @@ class LLM {
 					}
 				});
 			} else {
-				let msg = ''; // The chat string
+				let msg = prefill; // The chat string
+				let chain = Promise.resolve();
 
 				const rl = readline.createInterface({'input': res});
-				let chain = Promise.resolve();
 				rl.on('line', buf => {
 					const delta = parseLine(buf);
 					if (delta) {
+						// console.log(delta);
 						msg += delta;
 						const currentResponse = msg;
 						if (onUpdate) chain = chain.then(async () => {
-							console.log('currentResponse:', currentResponse.length, 'msg:', msg.length);
 							if (currentResponse !== msg) {
-								console.log('==> onUpdate');
+								console.log('==> callback');
 								await onUpdate(msg);
 							}
 						});
 					}
 				});
-
 				rl.once('close', () => {
 					chain.then(() => {
+						// console.log('FINAL:', msg);
 						finalResponse(msg);
 					});
 				});

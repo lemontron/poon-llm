@@ -1,8 +1,14 @@
 {
   "name": "poon-llm",
-  "keywords": ["llm", "chatgpt", "claude", "ollama", "anthropic"],
+  "keywords": [
+    "llm",
+    "chatgpt",
+    "claude",
+    "ollama",
+    "anthropic"
+  ],
   "type": "module",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Connect to and stream from any OpenAI/Anthropic API",
   "main": "index.js",
   "scripts": {
