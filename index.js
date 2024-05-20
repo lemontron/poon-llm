@@ -2,26 +2,29 @@ import http from 'node:http';
 import https from 'node:https';
 import readline from 'node:readline';
 
-const parseLine = (buf) => {
+// Parses any single line and returns a message delta if present
+const parseDelta = (buf) => {
 	try {
 		const data = JSON.parse(buf.toString().slice(6));
-		if (data && data.delta && data.delta.text) return data.delta.text;
-		return data.choices[0].delta.content;
+		if (data && data.delta && data.delta.text) return data.delta.text; // Anthropic
+		return data.choices[0].delta.content; // OpenAI
 	} catch (err) {
 		return '';
 	}
 };
 
+// Cleans the stream and emits only events parseable by parseLine and
+// resolves once the whole stream ends
 const consumeStreamAsync = (stream, onLine) => new Promise(resolve => {
 	const rl = readline.createInterface({'input': stream});
 	rl.on('line', buf => {
-		const delta = parseLine(buf);
+		const delta = parseDelta(buf);
 		if (delta) onLine(delta);
 	});
 	rl.once('close', resolve);
 });
 
-// Use the correct request method based on the URL protocol
+// Chooses method based on the protocol
 const request = (url, ...rest) => {
 	if (url.protocol === 'http:') return http.request(url, ...rest);
 	if (url.protocol === 'https:') return https.request(url, ...rest);
@@ -44,6 +47,7 @@ class LLM {
 		this.secretKey = secretKey;
 		this.systemPrompt = systemPrompt;
 
+		// Create headers for future requests
 		this.headers = {'Content-Type': 'application/json', ...headers};
 		if (this.protocol === 'anthropic') {
 			this.headers['X-Api-Key'] = this.secretKey;
@@ -128,6 +132,7 @@ class LLM {
 			});
 		};
 
+		// Fire off the request
 		const client = request(this._getChatUrl(), {
 			'method': 'POST',
 			'headers': this.headers,
