@@ -89,78 +89,81 @@ class LLM {
 		temperature = 0.7,
 		onUpdate,
 		prefill = '',
-	} = {}) => new Promise((resolve, reject) => {
+	} = {}) => {
+		if (typeof prompt !== 'string') throw new Error('chat expects a string');
 
-		const finalResponse = async (response) => {
-			if (onUpdate) await onUpdate(response);
-			if (json) {
-				try {
-					resolve(JSON.parse(response));
-				} catch (err) {
-					console.warn('Failed to parse response:', response);
-					reject(new Error('Failed to parse response'));
+		return new Promise((resolve, reject) => {
+			const finalResponse = async (response) => {
+				if (onUpdate) await onUpdate(response); // Send one last update before resolving
+				if (json) {
+					try {
+						resolve(JSON.parse(response));
+					} catch (err) {
+						console.warn('Failed to parse response:', response);
+						reject(new Error('Failed to parse response'));
+					}
+				} else {
+					resolve(response);
 				}
-			} else {
-				resolve(response);
+			};
+
+			// Create request body
+			const payload = {
+				'model': this.model,
+				'temperature': temperature,
+				'stream': true,
+				'messages': this._createMessages(prompt, context, prefill),
+			};
+			if (maxTokens) payload.max_tokens = maxTokens;
+			if (json) payload.response_format = {'type': 'json_object'};
+			if (this.protocol === 'anthropic') {
+				if (this.systemPrompt) payload.system = this.systemPrompt;
 			}
-		};
 
-		// Create request body
-		const payload = {
-			'model': this.model,
-			'temperature': temperature,
-			'stream': true,
-			'messages': this._createMessages(prompt, context, prefill),
-		};
-		if (maxTokens) payload.max_tokens = maxTokens;
-		if (json) payload.response_format = {'type': 'json_object'};
-		if (this.protocol === 'anthropic') {
-			if (this.systemPrompt) payload.system = this.systemPrompt;
-		}
-
-		// Logs the error message in JSON or plain text as a fallback
-		const handleError = (res) => {
-			let body = '';
-			res.on('data', buf => body += buf.toString());
-			res.on('end', () => {
-				try {
-					const data = JSON.parse(body);
-					console.warn('[LLM Error]', res.statusCode, data);
-				} catch (err) {
-					console.warn('[LLM Error]', res.statusCode, body);
-				}
-			});
-		};
-
-		// Fire off the request
-		const client = request(this._getChatUrl(), {
-			'method': 'POST',
-			'headers': this.headers,
-		}, res => {
-			if (res.statusCode >= 400) return handleError(res);
-
-			let msg = prefill, isUpdating = false, chain = Promise.resolve();
-
-			let count = 0;
-			consumeStreamAsync(res, delta => {
-				msg += delta;
-				if (onUpdate && !isUpdating) chain = chain.then(async () => {
-					count++;
-					// console.log('updates=', count);
-					isUpdating = true;
-					await onUpdate(msg);
-					setTimeout(() => isUpdating = false, 150);
+			// Logs the error message in JSON or plain text as a fallback
+			const handleError = (res) => {
+				let body = '';
+				res.on('data', buf => body += buf.toString());
+				res.on('end', () => {
+					try {
+						const data = JSON.parse(body);
+						console.warn('[LLM Error]', res.statusCode, data);
+					} catch (err) {
+						console.warn('[LLM Error]', res.statusCode, body);
+					}
 				});
-			}).then(() => {
-				chain.then(() => {
-					finalResponse(msg);
+			};
+
+			// Fire off the request
+			const client = request(this._getChatUrl(), {
+				'method': 'POST',
+				'headers': this.headers,
+			}, res => {
+				if (res.statusCode >= 400) return handleError(res);
+
+				let msg = prefill, isUpdating = false, chain = Promise.resolve();
+
+				let count = 0;
+				consumeStreamAsync(res, delta => {
+					msg += delta;
+					if (onUpdate && !isUpdating) chain = chain.then(async () => {
+						count++;
+						// console.log('updates=', count);
+						isUpdating = true;
+						await onUpdate(msg);
+						setTimeout(() => isUpdating = false, 150);
+					});
+				}).then(() => {
+					chain.then(() => {
+						finalResponse(msg);
+					});
 				});
 			});
+
+			client.on('error', reject); // Handle errors
+			client.end(JSON.stringify(payload));
 		});
-
-		client.on('error', reject); // Handle errors
-		client.end(JSON.stringify(payload));
-	});
+	};
 }
 
 export default LLM;
