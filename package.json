@@ -8,12 +8,10 @@
     "anthropic"
   ],
   "type": "module",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Connect to and stream from any OpenAI/Anthropic API",
   "main": "index.js",
-  "scripts": {
-    "publish": "npm publish"
-  },
+  "scripts": {},
   "author": "James Loper",
   "license": "ISC"
 }

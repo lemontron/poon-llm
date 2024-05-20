@@ -59,7 +59,10 @@ class LLM {
 
 	_createMessages = (prompt, context = [], prefill) => {
 		const messages = [];
-		if (this.protocol === 'openai') messages.push({'role': 'system', 'content': this.systemPrompt});
+
+		if (this.protocol === 'openai' && this.systemPrompt) {
+			messages.push({'role': 'system', 'content': this.systemPrompt});
+		}
 
 		context.sort((a, b) => {
 			return (a.addedOn - b.addedOn);
@@ -70,7 +73,7 @@ class LLM {
 			});
 		});
 
-		messages.push({'role': 'user', 'content': prompt});
+		if (prompt) messages.push({'role': 'user', 'content': prompt});
 		if (prefill) messages.push({'role': 'assistant', 'content': prefill});
 		return messages;
 	};
