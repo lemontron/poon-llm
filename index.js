@@ -89,8 +89,11 @@ class LLM {
 		temperature = 0.7,
 		onUpdate,
 		prefill = '',
+		timeout = 30000,
 	} = {}) => {
-		if (typeof prompt !== 'string') throw new Error('chat expects a string');
+		if (typeof prompt !== 'string') throw new Error('prompt must be a string');
+		if (typeof prefill !== 'string') throw new Error('prefill must be a string');
+		if (typeof timeout !== 'number') throw new Error('timeout must be a number');
 
 		return new Promise((resolve, reject) => {
 			const finalResponse = async (response) => {
@@ -131,6 +134,7 @@ class LLM {
 					} catch (err) {
 						console.warn('[LLM Error]', res.statusCode, body);
 					}
+					console.warn('payload=', payload);
 				});
 			};
 
@@ -138,6 +142,7 @@ class LLM {
 			const client = request(this._getChatUrl(), {
 				'method': 'POST',
 				'headers': this.headers,
+				'timeout': timeout,
 			}, res => {
 				if (res.statusCode >= 400) return handleError(res);
 
