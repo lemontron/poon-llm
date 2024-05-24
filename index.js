@@ -165,6 +165,12 @@ class LLM {
 				});
 			});
 
+			client.on('timeout', () => {
+				console.log('Request timed out');
+				client.destroy();
+				reject(new Error('Request timed out'));
+			});
+
 			client.on('error', reject); // Handle errors
 			client.end(JSON.stringify(payload));
 		});
