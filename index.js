@@ -1,6 +1,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import readline from 'node:readline';
+import { parseFromString } from '/node_modules/dom-parser/dist/index.js';
 
 // Parses any single line and returns a message delta if present
 const parseDelta = (buf) => {
@@ -11,6 +12,23 @@ const parseDelta = (buf) => {
 	} catch (err) {
 		return '';
 	}
+};
+
+const parseJson = (msg) => {
+	try {
+		return JSON.parse(msg);
+	} catch (err) {
+		throw new Error('Failed to parse response');
+	}
+};
+
+const parseXml = (msg, xml) => {
+	const dom = parseFromString(msg);
+	return xml.reduce((res, tag) => {
+		const node = dom.getElementsByTagName(tag)[0];
+		if (node) res[tag] = node.textContent;
+		return res;
+	}, {});
 };
 
 // Cleans the stream and emits only events parseable by parseLine and
@@ -84,6 +102,7 @@ class LLM {
 
 	chat = (prompt, {
 		json,
+		xml,
 		context = [],
 		maxTokens,
 		temperature = 0.7,
@@ -94,20 +113,19 @@ class LLM {
 		if (typeof prompt !== 'string') throw new Error('prompt must be a string');
 		if (typeof prefill !== 'string') throw new Error('prefill must be a string');
 		if (typeof timeout !== 'number') throw new Error('timeout must be a number');
+		if (xml && !Array.isArray(xml)) throw new Error('xml must be an array of strings');
+
+		const parseResponse = (msg) => {
+			if (json) return parseJson(msg);
+			if (xml) return parseXml(msg, xml);
+			return msg;
+		};
 
 		return new Promise((resolve, reject) => {
-			const finalResponse = async (response) => {
-				if (onUpdate) await onUpdate(response); // Send one last update before resolving
-				if (json) {
-					try {
-						resolve(JSON.parse(response));
-					} catch (err) {
-						console.warn('Failed to parse response:', response);
-						reject(new Error('Failed to parse response'));
-					}
-				} else {
-					resolve(response);
-				}
+			const finalResponse = async (res) => {
+				res = parseResponse(res);
+				if (onUpdate) await onUpdate(res); // Send one last update before resolving
+				resolve(res);
 			};
 
 			// Create request body
@@ -155,7 +173,8 @@ class LLM {
 						count++;
 						// console.log('updates=', count);
 						isUpdating = true;
-						await onUpdate(msg);
+
+						await onUpdate(parseResponse(msg));
 						setTimeout(() => isUpdating = false, 150);
 					});
 				}).then(() => {
