@@ -1,54 +1,6 @@
-import http from 'node:http';
-import https from 'node:https';
-import readline from 'node:readline';
-import { parseFromString } from '/node_modules/dom-parser/dist/index.js';
+import { request, consumeStreamAsync, parseJson, parseXml } from './util.js';
 
-// Parses any single line and returns a message delta if present
-const parseDelta = (buf) => {
-	try {
-		const data = JSON.parse(buf.toString().slice(6));
-		if (data && data.delta && data.delta.text) return data.delta.text; // Anthropic
-		return data.choices[0].delta.content; // OpenAI
-	} catch (err) {
-		return '';
-	}
-};
-
-const parseJson = (msg) => {
-	try {
-		return JSON.parse(msg);
-	} catch (err) {
-		throw new Error('Failed to parse response');
-	}
-};
-
-const parseXml = (msg, xml) => {
-	const dom = parseFromString(msg);
-	return xml.reduce((res, tag) => {
-		const node = dom.getElementsByTagName(tag)[0];
-		if (node) res[tag] = node.textContent;
-		return res;
-	}, {});
-};
-
-// Cleans the stream and emits only events parseable by parseLine and
-// resolves once the whole stream ends
-const consumeStreamAsync = (stream, onLine) => new Promise(resolve => {
-	const rl = readline.createInterface({'input': stream});
-	rl.on('line', buf => {
-		const delta = parseDelta(buf);
-		if (delta) onLine(delta);
-	});
-	rl.once('close', resolve);
-});
-
-// Chooses method based on the protocol
-const request = (url, ...rest) => {
-	if (url.protocol === 'http:') return http.request(url, ...rest);
-	if (url.protocol === 'https:') return https.request(url, ...rest);
-};
-
-class LLM {
+export default class LLM {
 	constructor({
 		protocol = 'openai',
 		model,
@@ -81,22 +33,12 @@ class LLM {
 
 	_createMessages = (prompt, context = [], prefill) => {
 		const messages = [];
-
 		if (this.protocol === 'openai' && this.systemPrompt) {
 			messages.push({'role': 'system', 'content': this.systemPrompt});
 		}
-
-		context.sort((a, b) => {
-			return (a.addedOn - b.addedOn);
-		}).forEach(doc => {
-			messages.push({
-				'role': doc.isBot ? 'assistant' : 'user',
-				'content': doc.message,
-			});
-		});
-
+		messages.push(...context); // Add context messages
 		if (prompt) messages.push({'role': 'user', 'content': prompt});
-		if (prefill) messages.push({'role': 'assistant', 'content': prefill});
+		if (prefill) messages.push({'role': 'assistant', 'content': prefill}); // I think this only works for Anthropic
 		return messages;
 	};
 
@@ -114,6 +56,7 @@ class LLM {
 		if (typeof prefill !== 'string') throw new Error('prefill must be a string');
 		if (typeof timeout !== 'number') throw new Error('timeout must be a number');
 		if (xml && !Array.isArray(xml)) throw new Error('xml must be an array of strings');
+		if (xml && json) throw new Error('choose either xml or json, not both');
 
 		const parseResponse = (msg) => {
 			if (json) return parseJson(msg);
@@ -124,7 +67,7 @@ class LLM {
 		return new Promise((resolve, reject) => {
 			const finalResponse = async (res) => {
 				res = parseResponse(res);
-				if (onUpdate) await onUpdate(res); // Send one last update before resolving
+				if (onUpdate) await onUpdate(res, null); // Send one last update before resolving
 				resolve(res);
 			};
 
@@ -161,27 +104,24 @@ class LLM {
 				'method': 'POST',
 				'headers': this.headers,
 				'timeout': timeout,
-			}, res => {
+			}, async (res) => {
 				if (res.statusCode >= 400) return handleError(res);
 
 				let msg = prefill, isUpdating = false, chain = Promise.resolve();
 
 				let count = 0;
-				consumeStreamAsync(res, delta => {
+				await consumeStreamAsync(res, delta => {
 					msg += delta;
 					if (onUpdate && !isUpdating) chain = chain.then(async () => {
 						count++;
-						// console.log('updates=', count);
 						isUpdating = true;
-
-						await onUpdate(parseResponse(msg));
+						await onUpdate(parseResponse(msg), count);
 						setTimeout(() => isUpdating = false, 150);
 					});
-				}).then(() => {
-					chain.then(() => {
-						finalResponse(msg);
-					});
 				});
+
+				await chain;
+				await finalResponse(msg);
 			});
 
 			client.on('timeout', () => {
@@ -196,4 +136,22 @@ class LLM {
 	};
 }
 
-export default LLM;
+export class OpenAI extends LLM {
+	constructor(opts) {
+		super({
+			'protocol': 'openai',
+			'apiBase': 'https://api.openai.com',
+			...opts,
+		});
+	}
+}
+
+export class Anthropic extends LLM {
+	constructor(opts) {
+		super({
+			'protocol': 'anthropic',
+			'apiBase': 'https://api.anthropic.com/v1/messages',
+			...opts,
+		});
+	}
+}

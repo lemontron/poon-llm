@@ -1,5 +1,7 @@
-Connect to and stream from any OpenAI/Anthropic API. Lightweight, high performance, and simple, thoughtful API made for
-developers. Tested on OpenAI, Ollama, and Claude.
+**Get better results from your LLM's!** Connect to and stream from any OpenAI/Anthropic API. Lightweight, high
+performance,
+and simple, thoughtful API made for
+developers, encouraging use of CoT. Tested on OpenAI, Ollama, and Claude.
 
 ```bash
 npm install poon-llm
@@ -8,29 +10,29 @@ npm install poon-llm
 ### OpenAI Example
 
 ``` javascript
-const llm = new LLM({
-    'apiBase': 'https://api.openai.com',
-    'secretKey': 'key',
-    'model': 'gpt-4o',
-    'systemPrompt': 'You are a helpful assistant.',
-});
+import { OpenAI } from 'poon-llm';
 
+const llm = new OpenAI({'secretKey': 'key', 'model': 'gpt-4o'});
 const response = await llm.chat('Why is the sky blue?');
+```
 
+### Ollama Example
+
+``` javascript
+const llm = new OpenAI({'apiBase': 'http://10.0.0.20', 'model': 'llama3'});
+const response = await llm.chat('Why is the sky blue?');
 ```
 
 ### Anthropic Example
 
 ``` javascript
-const llm = new LLM({
-    'protocol': 'anthropic',
-    'apiBase': 'https://api.anthropic.com/v1/messages',
-    'secretKey': 'key',
-    'headers': {'Anthropic-Version': '2023-06-01'},
-    'model': 'claude-3-opus-20240229',
-    'systemPrompt': 'You are a helpful assistant.',
-});
+import { Anthropic } from 'poon-llm';
 
+const llm = new Anthropic({
+    'secretKey': 'key',
+    'model': 'claude-3-opus-20240229',
+    'headers': {'Anthropic-Version': '2023-06-01'},
+});
 const response = await llm.chat('Why is the sky blue?');
 ```
 
@@ -51,36 +53,43 @@ const response = await llm.chat('Why is the sky blue?', {
 });
 ```
 
-# Chat: Other Options
+# API Documentation
+
+## New Client - Options
+
+Apples to `new OpenAI(options)`, `new Anthropic(options)`
+
+| Name           | Description                                                        |
+|----------------|--------------------------------------------------------------------|
+| `secretKey`    | Secret API key (Required for most API's)                           |
+| `apiBase`      | Specifies new base URL. Overrides the built-in defaults (Optional) |
+| `systemPrompt` | Prompt to use for all chats                                        |
+| `headers`      | Object containing headers to send (Required for Anthropic)         |
+
+## Chat Options
+
+Applies to individual chat calls - `llm.chat(message, options)`.
 
 | Option        | Description                                                                                                                                                                                                                                                   |
 |---------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `json`        | Enable JSON output: Requests underlying LLM API to respond in JSON, also JSON-parses and returns response. _You must request the reply to be in JSON form in the system prompt. An error message will appear if the word JSON is not detected in the prompt._ |
+| `xml`         | Array containing XML tags to parse. Causes the output to be an object with the keys specified by the array.                                                                                                                                                   |
 | `onUpdate`    | Callback function that is called every time the model has more chunks to append to the response.                                                                                                                                                              |
 | `context`     | Chat history for the conversation, must be an array of objects like `{'role': String ('user' or 'assistant'), 'content': String}`.                                                                                                                            |
 | `temperature` | Float value controlling randomness in boltzmann sampling. Lower is less random, higher is more random.                                                                                                                                                        |
 | `maxTokens`   | Integer value controlling the maximum number of tokens generated.                                                                                                                                                                                             |
+| `prefill`     | String to prefill the LLM's response with. Useful for CoT.                                                                                                                                                                                                    |
 
-# Hot tip for Chain of Thought Prompts
+# Chain of Thought Example
 
-Although JSON is an option, it turns out that XML is generally a better choice for prompts with Chain of Thought,
-because the LLM has an easier time formatting it correctly, as it just needs to understand delimiters, rather than
-strict adherence to a certain syntax, and parsing is not too much harder. Here is an example showing how this can be
-done.
+Although JSON option is available, XML is generally better for prompts with Chain of Thought,
+because the LLM has an easier time formatting it, as it just needs to understand delimiters, rather than
+strict adherence to a certain syntax. XML is also easier to stream.
 
 ``` javascript
-import { parseFromString } from 'dom-parser';
-
 const response = await llm.chat(chatString, {
     'prefill': '<scratchpad>',
     'maxTokens': 2048,
+    'xml': true,
 });
-
-const dom = parseFromString(response);
-const [scratchpadNode] = dom.getElementsByTagName('scratchpad');
-const [replyNode] = dom.getElementsByTagName('reply');
-return {
-    'scratchpad': scratchpadNode?.textContent.trim(),
-    'body': replyNode?.textContent.trim(),
-};
 ```
