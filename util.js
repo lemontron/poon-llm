@@ -14,12 +14,17 @@ export const parseJson = (msg) => {
 
 // Better parser, tries to parse XML using array of known tags
 export const parseXml = (msg, xmlTags) => {
-	const dom = parseFromString(msg);
-	return xmlTags.reduce((res, tag) => {
-		const node = dom.getElementsByTagName(tag)[0];
-		if (node) res[tag] = node.textContent.trim();
-		return res;
-	}, {});
+	try {
+		const dom = parseFromString(msg);
+		return xmlTags.reduce((res, tag) => {
+			const node = dom.getElementsByTagName(tag)[0];
+			if (node) res[tag] = node.textContent.trim();
+			return res;
+		}, {});
+	} catch (err) {
+		console.warn(msg);
+		throw err;
+	}
 };
 
 // Chooses method based on the protocol

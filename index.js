@@ -43,6 +43,7 @@ export default class LLM {
 	};
 
 	chat = (prompt, {
+		data,
 		json,
 		xml,
 		context = [],
@@ -57,6 +58,19 @@ export default class LLM {
 		if (typeof timeout !== 'number') throw new Error('timeout must be a number');
 		if (xml && !Array.isArray(xml)) throw new Error('xml must be an array of strings');
 		if (xml && json) throw new Error('choose either xml or json, not both');
+		if (data) prompt = applyTemplate(prompt, data);
+
+		const payload = {
+			'model': this.model,
+			'temperature': temperature,
+			'stream': true,
+			'messages': this._createMessages(prompt, context, prefill),
+		};
+		if (maxTokens) payload.max_tokens = maxTokens;
+		if (json) payload.response_format = {'type': 'json_object'};
+		if (this.protocol === 'anthropic') {
+			if (this.systemPrompt) payload.system = this.systemPrompt;
+		}
 
 		const parseResponse = (msg) => {
 			if (json) return parseJson(msg);
@@ -71,19 +85,6 @@ export default class LLM {
 				resolve(res);
 			};
 
-			// Create request body
-			const payload = {
-				'model': this.model,
-				'temperature': temperature,
-				'stream': true,
-				'messages': this._createMessages(prompt, context, prefill),
-			};
-			if (maxTokens) payload.max_tokens = maxTokens;
-			if (json) payload.response_format = {'type': 'json_object'};
-			if (this.protocol === 'anthropic') {
-				if (this.systemPrompt) payload.system = this.systemPrompt;
-			}
-
 			// Logs the error message in JSON or plain text as a fallback
 			const handleError = (res) => {
 				let body = '';
@@ -95,7 +96,7 @@ export default class LLM {
 					} catch (err) {
 						console.warn('[LLM Error]', res.statusCode, body);
 					}
-					console.warn('payload=', payload);
+					console.warn('[ORIGINAL PARAMS]', payload);
 				});
 			};
 
@@ -119,7 +120,6 @@ export default class LLM {
 						setTimeout(() => isUpdating = false, 150);
 					});
 				});
-
 				await chain;
 				await finalResponse(msg);
 			});
@@ -155,3 +155,11 @@ export class Anthropic extends LLM {
 		});
 	}
 }
+
+export const applyTemplate = (template, data) => {
+	Object.keys(data).forEach(key => {
+		template = template.replace(new RegExp(`{{${key}}}`, 'g'), data[key]);
+	});
+	if (template.includes('{{')) throw new Error('Missing data for template');
+	return template;
+};
