@@ -1,7 +1,6 @@
-**Get better results from your LLM's!** Connect to and stream from any OpenAI/Anthropic API. Lightweight, high
-performance,
-and simple, thoughtful API made for
-developers, encouraging use of CoT. Tested on OpenAI, Ollama, and Claude.
+Connect to and stream from any OpenAI/Anthropic API. Lightweight, high
+performance, and simple, thoughtful API made for
+developers, encouraging use of CoT. Tested on OpenAI, Ollama, and Claude. **Get better results from your LLM's using techniques that are made simple by poon-llm.**
 
 ```bash
 npm install poon-llm
@@ -57,7 +56,7 @@ const response = await llm.chat('Why is the sky blue?', {
 
 ## New Client - Options
 
-Apples to `new OpenAI(options)`, `new Anthropic(options)`
+Applies to `new OpenAI(options)`, `new Anthropic(options)`
 
 | Name           | Description                                                        |
 |----------------|--------------------------------------------------------------------|

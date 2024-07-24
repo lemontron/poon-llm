@@ -15,6 +15,7 @@
   "author": "James Loper",
   "license": "ISC",
   "dependencies": {
-    "dom-parser": "^1.1.5"
+    "dom-parser": "^1.1.5",
+    "mustache": "^4.2.0"
   }
 }

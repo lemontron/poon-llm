@@ -1,4 +1,5 @@
 import { request, consumeStreamAsync, parseJson, parseXml } from './util.js';
+import Mustache from 'mustache';
 
 export default class LLM {
 	constructor({
@@ -31,19 +32,39 @@ export default class LLM {
 		if (this.protocol === 'anthropic') return new URL('/v1/messages', this.apiBase);
 	};
 
-	_createMessages = (prompt, context = [], prefill) => {
+	_createMessages = (prompt, image, context = [], prefill) => {
 		const messages = [];
 		if (this.protocol === 'openai' && this.systemPrompt) {
 			messages.push({'role': 'system', 'content': this.systemPrompt});
 		}
 		messages.push(...context); // Add context messages
-		if (prompt) messages.push({'role': 'user', 'content': prompt});
+
+		// This is the user's content
+		if (image) {
+			messages.push({
+				'role': 'user',
+				'content': [
+					{'type': 'text', 'text': prompt},
+					{'type': 'image_url', 'image_url': {'url': image}},
+				],
+			});
+		} else {
+			messages.push({'role': 'user', 'content': prompt});
+		}
+
 		if (prefill) messages.push({'role': 'assistant', 'content': prefill}); // I think this only works for Anthropic
 		return messages;
 	};
 
+	template = async (opts) => {
+		if (typeof opts.template !== 'string') throw new Error('Template must be a string');
+		if (typeof opts.data !== 'object') throw new Error('Data must be an object');
+		const prompt = Mustache.render(opts.template, opts.data);
+		return this.chat(prompt, opts);
+	};
+
 	chat = (prompt, {
-		data,
+		image,
 		json,
 		xml,
 		context = [],
@@ -52,20 +73,24 @@ export default class LLM {
 		onUpdate,
 		prefill = '',
 		timeout = 30000,
+		debug = false,
 	} = {}) => {
-		if (typeof prompt !== 'string') throw new Error('prompt must be a string');
-		if (typeof prefill !== 'string') throw new Error('prefill must be a string');
-		if (typeof timeout !== 'number') throw new Error('timeout must be a number');
-		if (xml && !Array.isArray(xml)) throw new Error('xml must be an array of strings');
-		if (xml && json) throw new Error('choose either xml or json, not both');
-		if (data) prompt = applyTemplate(prompt, data);
+		if (typeof prompt !== 'string') throw new Error('Prompt must be a string');
+		if (typeof prefill !== 'string') throw new Error('Prefill must be a string');
+		if (typeof timeout !== 'number') throw new Error('Timeout must be a number');
+		if (xml && !Array.isArray(xml)) throw new Error('XML must be an array of strings');
+		if (xml && json) throw new Error('Choose either XML or JSON, not both');
 
 		const payload = {
 			'model': this.model,
 			'temperature': temperature,
 			'stream': true,
-			'messages': this._createMessages(prompt, context, prefill),
+			'messages': this._createMessages(prompt, image, context, prefill),
 		};
+		if (debug) {
+			console.log('[LLM Messages]');
+			payload.messages.forEach(msg => console.log('==>', msg.role, msg.content));
+		}
 		if (maxTokens) payload.max_tokens = maxTokens;
 		if (json) payload.response_format = {'type': 'json_object'};
 		if (this.protocol === 'anthropic') {
@@ -112,6 +137,7 @@ export default class LLM {
 
 				let count = 0;
 				await consumeStreamAsync(res, delta => {
+					if (debug) console.log('Delta=', count);
 					msg += delta;
 					if (onUpdate && !isUpdating) chain = chain.then(async () => {
 						count++;
@@ -156,10 +182,4 @@ export class Anthropic extends LLM {
 	}
 }
 
-export const applyTemplate = (template, data) => {
-	Object.keys(data).forEach(key => {
-		template = template.replace(new RegExp(`{{${key}}}`, 'g'), data[key]);
-	});
-	if (template.includes('{{')) throw new Error('Missing data for template');
-	return template;
-};
+
