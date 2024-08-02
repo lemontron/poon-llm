@@ -1,7 +1,6 @@
 import http from 'node:http';
 import https from 'node:https';
 import readline from 'node:readline';
-import { parseFromString } from '/node_modules/dom-parser/dist/index.js';
 
 // First parser, tries to parse JSON
 export const parseJson = (msg) => {
@@ -12,13 +11,23 @@ export const parseJson = (msg) => {
 	}
 };
 
+const extractTags = (text) => {
+	let matches;
+	const regex = /<(\w+)>([\s\S]*?)(?:<\/\1>|$)/g;
+	const data = {};
+	while ((matches = regex.exec(text)) !== null) {
+		data[matches[1].toLowerCase()] = matches[2].trim();
+	}
+	return data;
+};
+
 // Better parser, tries to parse XML using array of known tags
 export const parseXml = (msg, xmlTags) => {
 	try {
-		const dom = parseFromString(msg);
+		const data = extractTags(msg);
 		return xmlTags.reduce((res, tag) => {
-			const node = dom.getElementsByTagName(tag)[0];
-			if (node) res[tag] = node.textContent.trim();
+			tag = tag.toLowerCase();
+			if (data[tag]) res[tag] = data[tag];
 			return res;
 		}, {});
 	} catch (err) {
@@ -54,3 +63,11 @@ export const consumeStreamAsync = (stream, onLine) => new Promise(resolve => {
 	});
 	rl.once('close', resolve);
 });
+
+export const prettyResponse = (data) => {
+	try {
+		return JSON.parse(data);
+	} catch (err) {
+		return data;
+	}
+};

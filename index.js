@@ -1,4 +1,4 @@
-import { request, consumeStreamAsync, parseJson, parseXml } from './util.js';
+import { request, consumeStreamAsync, parseJson, parseXml, prettyResponse } from './util.js';
 import Mustache from 'mustache';
 
 export default class LLM {
@@ -115,13 +115,10 @@ export default class LLM {
 				let body = '';
 				res.on('data', buf => body += buf.toString());
 				res.on('end', () => {
-					try {
-						const data = JSON.parse(body);
-						console.warn('[LLM Error]', res.statusCode, data);
-					} catch (err) {
-						console.warn('[LLM Error]', res.statusCode, body);
-					}
-					console.warn('[ORIGINAL PARAMS]', payload);
+					const error = prettyResponse(body);
+					console.warn('[LLM]', 'StatusCode=', res.statusCode, 'Body=', error);
+					console.warn('Payload=', payload);
+					reject(new Error(`LLM failed, ${res.statusCode}, ${JSON.stringify(error)}`));
 				});
 			};
 
