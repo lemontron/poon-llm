@@ -56,10 +56,14 @@ export default class LLM {
 		return messages;
 	};
 
+	renderTemplate = (template, data) => {
+		return Mustache.render(template, data);
+	};
+
 	template = async (opts) => {
 		if (typeof opts.template !== 'string') throw new Error('Template must be a string');
 		if (typeof opts.data !== 'object') throw new Error('Data must be an object');
-		const prompt = Mustache.render(opts.template, opts.data);
+		const prompt = this.renderTemplate(opts.template, opts.data);
 		return this.chat(prompt, opts);
 	};
 
