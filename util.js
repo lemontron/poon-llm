@@ -14,11 +14,22 @@ export const parseJson = (msg) => {
 const extractTags = (text) => {
 	let matches;
 	const regex = /<(\w+)>([\s\S]*?)(?:<\/\1>|$)/g;
-	const data = {};
+	const res = {};
+
 	while ((matches = regex.exec(text)) !== null) {
-		data[matches[1].toLowerCase()] = matches[2].trim();
+		const key = matches[1].toLowerCase();
+		const val = matches[2].trim();
+
+		if (typeof res[key] === 'string') { // promote to array
+			res[key] = [res[key], val];
+		} else if (Array.isArray(res[key])) { // append to existing array
+			res[key].push(val);
+		} else { // first time we see this key
+			res[key] = val;
+		}
 	}
-	return data;
+
+	return res;
 };
 
 // Better parser, tries to parse XML using array of known tags

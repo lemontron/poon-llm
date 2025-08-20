@@ -109,6 +109,7 @@ export default class LLM {
 
 		return new Promise((resolve, reject) => {
 			const finalResponse = async (res) => {
+				if (debug) console.log('[Response]\n', res);
 				res = parseResponse(res);
 				if (onUpdate) await onUpdate(res, null); // Send one last update before resolving
 				resolve(res);
