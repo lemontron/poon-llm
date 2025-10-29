@@ -73,7 +73,7 @@ export default class LLM {
 		xml,
 		context = [],
 		maxTokens,
-		temperature = 0.7,
+		temperature,
 		onUpdate,
 		prefill = '',
 		timeout = 30000,
