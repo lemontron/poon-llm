@@ -1,94 +1,94 @@
-Connect to and stream from any OpenAI/Anthropic API. Lightweight, high
-performance, and simple, thoughtful API made for
-developers, encouraging use of CoT. Tested on OpenAI, Ollama, and Claude. **Get better results from your LLM's using techniques that are made simple by poon-llm.**
+Opinionated OpenAI Responses API client with streaming, server-managed history,
+message/update events, and automatic tool execution.
 
 ```bash
 npm install poon-llm
 ```
 
-### OpenAI Example
-
-``` javascript
+```javascript
 import { OpenAI } from 'poon-llm';
 
-const llm = new OpenAI({'secretKey': 'key', 'model': 'gpt-4o'});
-const response = await llm.chat('Why is the sky blue?');
-```
-
-### Ollama Example
-
-``` javascript
-const llm = new OpenAI({'apiBase': 'http://10.0.0.20', 'model': 'llama3'});
-const response = await llm.chat('Why is the sky blue?');
-```
-
-### Anthropic Example
-
-``` javascript
-import { Anthropic } from 'poon-llm';
-
-const llm = new Anthropic({
-    'secretKey': 'key',
-    'model': 'claude-3-opus-20240229',
-    'headers': {'Anthropic-Version': '2023-06-01'},
+const llm = new OpenAI({
+  'secretKey': process.env.OPENAI_API_KEY,
+  'model': 'gpt-5.4',
 });
-const response = await llm.chat('Why is the sky blue?');
-```
 
-# Streaming
+llm.on('message', message => {
+  console.log('message', message);
+});
 
-Streaming events occur at a fast rate, so to avoid crashing your
-server, `poon-llm` employs an efficient method to combat this: While an async onUpdate is executing, any chunks that
-come in will be ignored so that onUpdate will only be called as fast as your code can handle it. For example, if you are
-on a
-shared database that takes 1 second to write, your callbacks will fire back to back, after each write, and then
-once more at the very end.
+llm.on('update', message => {
+  console.log('update', message);
+});
 
-``` javascript
 const response = await llm.chat('Why is the sky blue?', {
-    'onUpdate': text => Drafts.updateAsync({'_id': id}, {
-        $set: {'body': text}
-    }),
+  'systemPrompt': 'Be concise.',
+});
+
+console.log(response.content);
+console.log(response.lastMessageId);
+```
+
+Continue a conversation by passing `lastMessageId`:
+
+```javascript
+const first = await llm.chat('Hello');
+const second = await llm.chat('Continue', {
+  'lastMessageId': first.lastMessageId,
 });
 ```
 
-# API Documentation
+Automatic tools:
 
-## New Client - Options
-
-Applies to `new OpenAI(options)`, `new Anthropic(options)`
-
-| Name           | Description                                                        |
-|----------------|--------------------------------------------------------------------|
-| `secretKey`    | Secret API key (Required for most API's)                           |
-| `apiBase`      | Specifies new base URL. Overrides the built-in defaults (Optional) |
-| `systemPrompt` | Prompt to use for all chats                                        |
-| `headers`      | Object containing headers to send (Required for Anthropic)         |
-
-## Chat Options
-
-Applies to individual chat calls - `llm.chat(message, options)`.
-
-| Option        | Description                                                                                                                                                                                                                                                   |
-|---------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `json`        | Enable JSON output: Requests underlying LLM API to respond in JSON, also JSON-parses and returns response. _You must request the reply to be in JSON form in the system prompt. An error message will appear if the word JSON is not detected in the prompt._ |
-| `xml`         | Array containing XML tags to parse. Causes the output to be an object with the keys specified by the array.                                                                                                                                                   |
-| `onUpdate`    | Callback function that is called every time the model has more chunks to append to the response.                                                                                                                                                              |
-| `context`     | Chat history for the conversation, must be an array of objects like `{'role': String ('user' or 'assistant'), 'content': String}`.                                                                                                                            |
-| `temperature` | Float value controlling randomness in boltzmann sampling. Lower is less random, higher is more random.                                                                                                                                                        |
-| `maxTokens`   | Integer value controlling the maximum number of tokens generated.                                                                                                                                                                                             |
-| `prefill`     | String to prefill the LLM's response with. Useful for CoT.                                                                                                                                                                                                    |
-
-# Chain of Thought Example
-
-Although JSON option is available, XML is generally better for prompts with Chain of Thought,
-because the LLM has an easier time formatting it, as it just needs to understand delimiters, rather than
-strict adherence to a certain syntax. XML is also easier to stream.
-
-``` javascript
-const response = await llm.chat(chatString, {
-    'prefill': '<scratchpad>',
-    'maxTokens': 2048,
-    'xml': true,
+```javascript
+const response = await llm.chat('What is the weather in Boston?', {
+  'tools': {
+    'get_weather': {
+      'description': 'Look up the weather for a city',
+      'parameters': {
+        'type': 'object',
+        'properties': {
+          'city': {'type': 'string'},
+        },
+        'required': ['city'],
+      },
+      'run': async ({city}) => ({'forecast': `Sunny in ${city}`}),
+    },
+  },
 });
+```
+
+# API
+
+## Client options
+
+| Name | Description |
+|------|-------------|
+| `secretKey` | OpenAI API key |
+| `apiBase` | Override the default API base URL |
+| `headers` | Extra headers to send |
+
+## `llm.chat(prompt, options)`
+
+| Option | Description |
+|--------|-------------|
+| `systemPrompt` | Instructions sent for this chat call |
+| `json` | Request JSON output and parse the final `response.content` as JSON |
+| `xml` | Parse the final `response.content` by extracting the listed XML tags |
+| `lastMessageId` | Continue a server-managed conversation |
+| `temperature` | Sampling temperature |
+| `maxTokens` | Maximum output tokens |
+| `timeout` | Request timeout in milliseconds |
+| `tools` | Object map of tool definitions and handlers |
+| `onMessage` | Optional per-call listener for `message` events |
+| `onUpdate` | Optional per-call listener for `update` events |
+
+`llm.chat()` returns:
+
+```javascript
+{
+  'content': String | Object,
+  'lastMessageId': String | null,
+  'messages': Array<Message>,
+}
 ```

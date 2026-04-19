@@ -3,15 +3,17 @@
   "keywords": [
     "llm",
     "chatgpt",
-    "claude",
-    "ollama",
-    "anthropic"
+    "openai",
+    "responses-api",
+    "tool-calling"
   ],
   "type": "module",
-  "version": "1.2.0",
-  "description": "Connect to and stream from any OpenAI/Anthropic API",
+  "version": "3.0.0",
+  "description": "Opinionated OpenAI Responses API client with streaming and automatic tools",
   "main": "index.js",
-  "scripts": {},
+  "scripts": {
+    "test": "node --test"
+  },
   "author": "James Loper",
   "license": "ISC",
   "dependencies": {

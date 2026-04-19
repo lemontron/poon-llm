@@ -53,14 +53,12 @@ export const request = (url, ...rest) => {
 	if (url.protocol === 'https:') return https.request(url, ...rest);
 };
 
-// Parses any single line and returns a message delta if present
-const parseDelta = (buf) => {
+// Parses any single SSE data line into its raw JSON payload.
+const parseStreamEvent = (buf) => {
 	try {
-		const data = JSON.parse(buf.toString().slice(6));
-		if (data && data.delta && data.delta.text) return data.delta.text; // Anthropic
-		return data.choices[0].delta.content; // OpenAI
+		return JSON.parse(buf.toString().slice(6));
 	} catch (err) {
-		return '';
+		return null;
 	}
 };
 
@@ -68,11 +66,17 @@ const parseDelta = (buf) => {
 // resolves once the whole stream ends
 export const consumeStreamAsync = (stream, onLine) => new Promise(resolve => {
 	const rl = readline.createInterface({'input': stream});
+	let chain = Promise.resolve();
 	rl.on('line', buf => {
-		const delta = parseDelta(buf);
-		if (delta) onLine(delta);
+		if (!buf.startsWith('data: ')) return;
+		if (buf === 'data: [DONE]') return;
+		const event = parseStreamEvent(buf);
+		if (event) chain = chain.then(() => onLine(event));
 	});
-	rl.once('close', resolve);
+	rl.once('close', async () => {
+		await chain;
+		resolve();
+	});
 });
 
 export const prettyResponse = (data) => {

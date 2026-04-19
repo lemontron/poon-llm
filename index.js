@@ -1,187 +1,313 @@
+import { EventEmitter } from 'node:events';
 import { request, consumeStreamAsync, parseJson, parseXml, prettyResponse } from './util.js';
-import Mustache from 'mustache';
 
-export default class LLM {
+export default class OpenAI extends EventEmitter {
 	constructor({
-		protocol = 'openai',
 		model,
-		apiBase,
+		apiBase = 'https://api.openai.com',
 		secretKey,
-		systemPrompt,
 		headers = {},
 	}) {
-		if (protocol !== 'openai' && protocol !== 'anthropic') throw new Error('Invalid protocol');
-
-		this.protocol = protocol;
+		super();
 		this.model = model;
 		this.apiBase = apiBase;
-		this.secretKey = secretKey;
-		this.systemPrompt = systemPrompt;
-
-		// Create headers for future requests
 		this.headers = {'Content-Type': 'application/json', ...headers};
-		if (this.protocol === 'anthropic') {
-			this.headers['X-Api-Key'] = this.secretKey;
-		} else if (this.protocol === 'openai') {
-			if (this.secretKey) this.headers['Authorization'] = `Bearer ${this.secretKey}`;
-		}
+		if (secretKey) this.headers['Authorization'] = `Bearer ${secretKey}`;
 	}
 
-	_getChatUrl = () => {
-		if (this.protocol === 'openai') return new URL('/v1/chat/completions', this.apiBase);
-		if (this.protocol === 'anthropic') return new URL('/v1/messages', this.apiBase);
-	};
-
-	_createMessages = (prompt, image, context = [], prefill) => {
-		const messages = [];
-		if (this.protocol === 'openai' && this.systemPrompt) {
-			messages.push({'role': 'system', 'content': this.systemPrompt});
-		}
-		messages.push(...context); // Add context messages
-
-		// This is the user's content
-		if (image) {
-			messages.push({
-				'role': 'user',
-				'content': [
-					{'type': 'text', 'text': prompt},
-					{'type': 'image_url', 'image_url': {'url': image}},
-				],
-			});
-		} else {
-			messages.push({'role': 'user', 'content': prompt});
-		}
-
-		if (prefill) messages.push({'role': 'assistant', 'content': prefill}); // I think this only works for Anthropic
-		return messages;
-	};
-
-	renderTemplate = (template, data) => {
-		return Mustache.render(template, data);
-	};
-
-	template = async (opts) => {
-		if (typeof opts.template !== 'string') throw new Error('Template must be a string');
-		if (typeof opts.data !== 'object') throw new Error('Data must be an object');
-		const prompt = this.renderTemplate(opts.template, opts.data);
-		return this.chat(prompt, opts);
-	};
-
-	chat = (prompt, {
+	chat = async (prompt, {
 		image,
 		json,
 		xml,
-		context = [],
+		lastMessageId,
+		systemPrompt,
 		maxTokens,
 		temperature,
+		onMessage,
 		onUpdate,
-		prefill = '',
 		timeout = 30000,
 		debug = false,
+		tools,
 	} = {}) => {
 		if (typeof prompt !== 'string') throw new Error('Prompt must be a string');
-		if (typeof prefill !== 'string') throw new Error('Prefill must be a string');
 		if (typeof timeout !== 'number') throw new Error('Timeout must be a number');
 		if (xml && !Array.isArray(xml)) throw new Error('XML must be an array of strings');
 		if (xml && json) throw new Error('Choose either XML or JSON, not both');
+		if (lastMessageId && typeof lastMessageId !== 'string') throw new Error('lastMessageId must be a string');
+		if (tools && (typeof tools !== 'object' || Array.isArray(tools))) throw new Error('tools must be an object');
 
-		const payload = {
-			'model': this.model,
-			'temperature': temperature,
-			'stream': true,
-			'messages': this._createMessages(prompt, image, context, prefill),
-		};
-		if (debug) {
-			console.log('[LLM Messages]');
-			payload.messages.forEach(msg => console.log('==>', msg.role, msg.content));
-		}
-		if (maxTokens) payload.max_tokens = maxTokens;
-		if (json) payload.response_format = {'type': 'json_object'};
-		if (this.protocol === 'anthropic') {
-			if (this.systemPrompt) payload.system = this.systemPrompt;
-		}
-
-		const parseResponse = (msg) => {
-			if (json) return parseJson(msg);
-			if (xml) return parseXml(msg, xml);
-			return msg;
-		};
-
-		return new Promise((resolve, reject) => {
-			const finalResponse = async (res) => {
-				if (debug) console.log('[Response]\n', res);
-				res = parseResponse(res);
-				if (onUpdate) await onUpdate(res, null); // Send one last update before resolving
-				resolve(res);
-			};
-
-			// Logs the error message in JSON or plain text as a fallback
-			const handleError = (res) => {
-				let body = '';
-				res.on('data', buf => body += buf.toString());
-				res.on('end', () => {
-					const error = prettyResponse(body);
-					console.warn('[LLM]', 'StatusCode=', res.statusCode, 'Body=', error);
-					console.warn('Payload=', payload);
-					reject(new Error(`LLM failed, ${res.statusCode}, ${JSON.stringify(error)}`));
+		const toolDefinitions = [];
+		const toolHandlers = {};
+		for (const [name, tool] of Object.entries(tools || {})) {
+			if (typeof tool === 'function') {
+				toolHandlers[name] = tool;
+				toolDefinitions.push({
+					'type': 'function',
+					'name': name,
+					'description': `${name} tool`,
+					'parameters': {'type': 'object', 'properties': {}, 'additionalProperties': true},
 				});
+				continue;
+			}
+			if (!tool || typeof tool !== 'object') throw new Error(`Invalid tool: ${name}`);
+			if (typeof tool.run !== 'function') throw new Error(`Tool "${name}" must define a run function`);
+			toolHandlers[name] = tool.run;
+			toolDefinitions.push({
+				'type': 'function',
+				'name': name,
+				'description': tool.description || `${name} tool`,
+				'parameters': tool.parameters || tool.inputSchema || {'type': 'object', 'properties': {}, 'additionalProperties': true},
+			});
+		}
+
+		let latestUpdate = null;
+		let isUpdating = false;
+		let updateCount = 0;
+		let chain = Promise.resolve();
+		const delay = () => new Promise(resolve => setTimeout(resolve, 150));
+		const sendUpdate = (message) => {
+			this.emit('update', message);
+			if (!onUpdate) return;
+			latestUpdate = message;
+			if (isUpdating) return;
+			chain = chain.then(async () => {
+				while (latestUpdate) {
+					const next = latestUpdate;
+					latestUpdate = null;
+					updateCount++;
+					isUpdating = true;
+					await onUpdate(next, updateCount);
+					await delay();
+					isUpdating = false;
+				}
+			});
+		};
+
+		const state = {
+			'messages': [],
+			'toolCalls': new Map(),
+			'assistantMessage': null,
+			'lastMessageId': lastMessageId || null,
+		};
+
+		let input = !image ? prompt : [{
+			'role': 'user',
+			'content': [
+				{'type': 'input_text', 'text': prompt},
+				{'type': 'input_image', 'image_url': image},
+			],
+		}];
+
+		while (true) {
+			const payload = {
+				'model': this.model,
+				'stream': true,
+				'input': input,
 			};
+			if (temperature !== undefined) payload.temperature = temperature;
+			if (systemPrompt) payload.instructions = systemPrompt;
+			if (state.lastMessageId) payload.previous_response_id = state.lastMessageId;
+			if (maxTokens) payload.max_output_tokens = maxTokens;
+			if (json) payload.text = {'format': {'type': 'json_object'}};
+			if (toolDefinitions.length) payload.tools = toolDefinitions;
+			if (debug) console.log('[LLM Payload]', payload);
 
-			// Fire off the request
-			const client = request(this._getChatUrl(), {
-				'method': 'POST',
-				'headers': this.headers,
-				'timeout': timeout,
-			}, async (res) => {
-				if (res.statusCode >= 400) return handleError(res);
-
-				let msg = prefill, isUpdating = false, chain = Promise.resolve();
-
-				let count = 0;
-				await consumeStreamAsync(res, delta => {
-					if (debug) console.log('Delta=', count);
-					msg += delta;
-					if (onUpdate && !isUpdating) chain = chain.then(async () => {
-						count++;
-						isUpdating = true;
-						await onUpdate(parseResponse(msg), count);
-						setTimeout(() => isUpdating = false, 150);
+			const startCount = state.messages.length;
+			await new Promise((resolve, reject) => {
+				const handleError = (res) => {
+					let body = '';
+					res.on('data', buf => body += buf.toString());
+					res.on('end', () => {
+						const error = prettyResponse(body);
+						console.warn('[LLM]', 'StatusCode=', res.statusCode, 'Body=', error);
+						console.warn('Payload=', payload);
+						reject(new Error(`LLM failed, ${res.statusCode}, ${JSON.stringify(error)}`));
 					});
+				};
+
+				const client = request(new URL('/v1/responses', this.apiBase), {
+					'method': 'POST',
+					'headers': this.headers,
+					'timeout': timeout,
+				}, async (res) => {
+					if (res.statusCode >= 400) return handleError(res);
+					await consumeStreamAsync(res, async (event) => {
+						if (debug) console.log('[LLM Event]', event.type, event);
+
+						if (event.type === 'response.created' || event.type === 'response.completed') {
+							const responseId = event.id || event.response?.id || null;
+							if (responseId) state.lastMessageId = responseId;
+							if (state.assistantMessage && state.assistantMessage.lastMessageId !== state.lastMessageId) {
+								state.assistantMessage.lastMessageId = state.lastMessageId;
+								sendUpdate(state.assistantMessage);
+							}
+							return;
+						}
+
+						if (event.type === 'response.output_item.added' && event.item?.type === 'function_call') {
+							const _id = event.item.call_id || event.item.id;
+							if (!_id) throw new Error('Tool call id missing from API response');
+							const message = {
+								'_id': _id,
+								'role': 'tool',
+								'type': 'tool_call',
+								'name': event.item.name,
+								'tool': event.item.name,
+								'arguments': event.item.arguments || '',
+								'options': event.item.arguments || '',
+								'input': null,
+								'output': null,
+								'result': null,
+								'status': 'requested',
+								'lastMessageId': state.lastMessageId,
+							};
+							state.toolCalls.set(message._id, message);
+							state.messages.push(message);
+							this.emit('message', message);
+							if (onMessage) await onMessage(message);
+							return;
+						}
+
+						if (event.type === 'response.output_item.added' && event.item?.type === 'message') {
+							if (!event.item.id) throw new Error('Assistant message id missing from API response');
+							state.assistantMessage = {
+								'_id': event.item.id,
+								'role': 'assistant',
+								'type': 'message',
+								'text': '',
+								'content': '',
+								'status': 'streaming',
+								'lastMessageId': state.lastMessageId,
+							};
+							state.messages.push(state.assistantMessage);
+							this.emit('message', state.assistantMessage);
+							if (onMessage) await onMessage(state.assistantMessage);
+							return;
+						}
+
+						if (event.type === 'response.function_call_arguments.delta') {
+							const message = state.toolCalls.get(event.item_id || event.call_id);
+							if (!message) return;
+							message.arguments += event.delta || '';
+							message.options = message.arguments;
+							try {
+								message.input = JSON.parse(message.arguments);
+							} catch (err) {}
+							sendUpdate(message);
+							return;
+						}
+
+						if (event.type === 'response.function_call_arguments.done') {
+							const message = state.toolCalls.get(event.item_id || event.call_id);
+							if (!message) return;
+							message.arguments = event.arguments || message.arguments;
+							message.options = message.arguments;
+							try {
+								message.input = JSON.parse(message.arguments || '{}');
+							} catch (err) {
+								throw new Error(`Tool "${message.name}" emitted invalid JSON arguments`);
+							}
+							sendUpdate(message);
+							return;
+						}
+
+						if (event.type === 'response.output_item.done' && event.item?.type === 'function_call') {
+							const message = state.toolCalls.get(event.item.call_id || event.item.id);
+							if (!message) return;
+							message.arguments = event.item.arguments || message.arguments;
+							message.options = message.arguments;
+							if (message.arguments && !message.input) {
+								try {
+									message.input = JSON.parse(message.arguments);
+								} catch (err) {
+									throw new Error(`Tool "${message.name}" emitted invalid JSON arguments`);
+								}
+							}
+							sendUpdate(message);
+							return;
+						}
+
+						if (event.type === 'response.output_text.delta') {
+							if (!state.assistantMessage) {
+								if (!event.item_id) throw new Error('Assistant message id missing from API response');
+								state.assistantMessage = {
+									'_id': event.item_id,
+									'role': 'assistant',
+									'type': 'message',
+									'text': '',
+									'content': '',
+									'status': 'streaming',
+									'lastMessageId': state.lastMessageId,
+								};
+								state.messages.push(state.assistantMessage);
+								this.emit('message', state.assistantMessage);
+								if (onMessage) await onMessage(state.assistantMessage);
+							}
+							state.assistantMessage.content += event.delta || '';
+							state.assistantMessage.text = state.assistantMessage.content;
+							sendUpdate(state.assistantMessage);
+						}
+					});
+					resolve();
 				});
-				await chain;
-				await finalResponse(msg);
+
+				client.on('timeout', () => {
+					client.destroy();
+					reject(new Error('Request timed out'));
+				});
+				client.on('error', reject);
+				client.end(JSON.stringify(payload));
 			});
 
-			client.on('timeout', () => {
-				console.log('Request timed out');
-				client.destroy();
-				reject(new Error('Request timed out'));
-			});
+			const freshToolMessages = state.messages.slice(startCount).filter(message => message.type === 'tool_call');
+			if (!freshToolMessages.length) break;
 
-			client.on('error', reject); // Handle errors
-			client.end(JSON.stringify(payload));
-		});
+			const outputs = [];
+			for (const message of freshToolMessages) {
+				const handler = toolHandlers[message.name];
+				if (!handler) throw new Error(`No tool handler registered for "${message.name}"`);
+				message.status = 'running';
+				sendUpdate(message);
+				try {
+					const output = await handler(message.input || {});
+					message.output = output;
+					message.result = output;
+					message.status = 'completed';
+					sendUpdate(message);
+					outputs.push({
+						'type': 'function_call_output',
+						'call_id': message._id,
+						'output': typeof output === 'string' ? output : JSON.stringify(output),
+					});
+				} catch (err) {
+					message.error = err.message;
+					message.status = 'failed';
+					sendUpdate(message);
+					throw err;
+				}
+			}
+			input = outputs;
+		}
+
+		if (state.assistantMessage) state.assistantMessage.status = 'completed';
+		if (state.assistantMessage) sendUpdate(state.assistantMessage);
+		while (latestUpdate || isUpdating) await chain;
+		const content = json
+			? parseJson(state.assistantMessage?.content || '')
+			: xml
+				? parseXml(state.assistantMessage?.content || '', xml)
+				: (state.assistantMessage?.content || '');
+		if (state.assistantMessage) {
+			state.assistantMessage.content = content;
+			state.assistantMessage.text = content;
+		}
+
+		return {
+			'content': content,
+			'lastMessageId': state.lastMessageId,
+			'messages': state.messages,
+		};
 	};
 }
 
-export class OpenAI extends LLM {
-	constructor(opts) {
-		super({
-			'protocol': 'openai',
-			'apiBase': 'https://api.openai.com',
-			...opts,
-		});
-	}
-}
-
-export class Anthropic extends LLM {
-	constructor(opts) {
-		super({
-			'protocol': 'anthropic',
-			'apiBase': 'https://api.anthropic.com/v1/messages',
-			...opts,
-		});
-	}
-}
-
-
+export { OpenAI };
