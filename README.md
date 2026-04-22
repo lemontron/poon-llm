@@ -77,6 +77,7 @@ const response = await llm.chat('What is the weather in Boston?', {
 | `xml` | Parse the final `response.content` by extracting the listed XML tags |
 | `lastMessageId` | Continue a server-managed conversation |
 | `temperature` | Sampling temperature |
+| `topP` | Nucleus sampling parameter |
 | `maxTokens` | Maximum output tokens |
 | `timeout` | Request timeout in milliseconds |
 | `tools` | Object map of tool definitions and handlers |

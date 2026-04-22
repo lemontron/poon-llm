@@ -23,14 +23,16 @@ export default class OpenAI extends EventEmitter {
 		systemPrompt,
 		maxTokens,
 		temperature,
+		topP,
 		onMessage,
 		onUpdate,
-		timeout = 30000,
+		timeout = 60000,
 		debug = false,
 		tools,
 	} = {}) => {
 		if (typeof prompt !== 'string') throw new Error('Prompt must be a string');
 		if (typeof timeout !== 'number') throw new Error('Timeout must be a number');
+		if (topP !== undefined && typeof topP !== 'number') throw new Error('topP must be a number');
 		if (xml && !Array.isArray(xml)) throw new Error('XML must be an array of strings');
 		if (xml && json) throw new Error('Choose either XML or JSON, not both');
 		if (lastMessageId && typeof lastMessageId !== 'string') throw new Error('lastMessageId must be a string');
@@ -105,6 +107,7 @@ export default class OpenAI extends EventEmitter {
 				'input': input,
 			};
 			if (temperature !== undefined) payload.temperature = temperature;
+			if (topP !== undefined) payload.top_p = topP;
 			if (systemPrompt) payload.instructions = systemPrompt;
 			if (state.lastMessageId) payload.previous_response_id = state.lastMessageId;
 			if (maxTokens) payload.max_output_tokens = maxTokens;
