@@ -1,60 +1,5 @@
 import { EventEmitter } from 'node:events';
-import crypto from 'node:crypto';
 import { request, consumeStreamAsync, parseJson, parseXml, prettyResponse } from './util.js';
-
-const DEFAULT_CLOUDINARY_API_BASE = 'https://api.cloudinary.com';
-
-const signCloudinaryParams = (params, secret) => {
-	const payload = Object.keys(params)
-		.sort()
-		.map(key => `${key}=${params[key]}`)
-		.join('&');
-	return crypto.createHash('sha1').update(`${payload}${secret}`).digest('hex');
-};
-
-const getImageMimeType = (image) => (
-	image?.mimeType
-	|| image?.type
-	|| 'image/png'
-);
-
-const getCloudinaryFile = (image) => {
-	if (typeof image === 'string') {
-		if (image.startsWith('data:') || image.startsWith('http://') || image.startsWith('https://')) return image;
-		return `data:image/png;base64,${image}`;
-	}
-	if (!image || typeof image !== 'object') throw new Error('image must be a string or object');
-	if (image.url) return image.url;
-	if (image.imageUrl) return image.imageUrl;
-	if (image.dataUrl) return image.dataUrl;
-	if (image.base64) return `data:${getImageMimeType(image)};base64,${image.base64}`;
-	if (image.buffer) return `data:${getImageMimeType(image)};base64,${Buffer.from(image.buffer).toString('base64')}`;
-	if (image.arrayBuffer) return `data:${getImageMimeType(image)};base64,${Buffer.from(image.arrayBuffer).toString('base64')}`;
-	throw new Error('image must include url, imageUrl, dataUrl, base64, buffer, or arrayBuffer');
-};
-
-const uploadCloudinaryImageAsync = async (image, cloudinary) => {
-	if (!cloudinary.cloudName) throw new Error('cloudinary.cloudName or CLOUDINARY_CLOUD_NAME is required');
-	if (!cloudinary.apiKey) throw new Error('cloudinary.apiKey or CLOUDINARY_API_KEY is required');
-	if (!cloudinary.apiSecret) throw new Error('cloudinary.apiSecret or CLOUDINARY_API_SECRET is required');
-	if (typeof fetch !== 'function') throw new Error('fetch is required to upload images to Cloudinary');
-
-	const params = {'timestamp': Math.floor(Date.now() / 1000)};
-	if (cloudinary.folder) params.folder = cloudinary.folder;
-	const form = new FormData();
-	form.append('file', getCloudinaryFile(image));
-	form.append('api_key', cloudinary.apiKey);
-	for (const [key, value] of Object.entries(params)) form.append(key, value);
-	form.append('signature', signCloudinaryParams(params, cloudinary.apiSecret));
-
-	const url = new URL(`/v1_1/${cloudinary.cloudName}/image/upload`, cloudinary.apiBase);
-	const res = await fetch(url, {'method': 'POST', 'body': form});
-	const body = await res.text();
-	const data = prettyResponse(body);
-	if (!res.ok) throw new Error(`Cloudinary upload failed, ${res.status}, ${JSON.stringify(data)}`);
-	if (!data.secure_url && !data.url) throw new Error('Cloudinary upload response missing URL');
-	return data.secure_url || data.url;
-};
 
 export default class OpenAI extends EventEmitter {
 	constructor({
@@ -62,24 +7,15 @@ export default class OpenAI extends EventEmitter {
 		apiBase = 'https://api.openai.com',
 		secretKey,
 		headers = {},
-		cloudinary = {},
 	}) {
 		super();
 		this.model = model;
 		this.apiBase = apiBase;
 		this.headers = {'Content-Type': 'application/json', ...headers};
 		if (secretKey) this.headers['Authorization'] = `Bearer ${secretKey}`;
-		this.cloudinary = {
-			'apiBase': cloudinary.apiBase || DEFAULT_CLOUDINARY_API_BASE,
-			'cloudName': cloudinary.cloudName || process.env.CLOUDINARY_CLOUD_NAME,
-			'apiKey': cloudinary.apiKey || process.env.CLOUDINARY_API_KEY,
-			'apiSecret': cloudinary.apiSecret || process.env.CLOUDINARY_API_SECRET,
-			'folder': cloudinary.folder || process.env.CLOUDINARY_FOLDER,
-		};
 	}
 
 	chat = async (prompt, {
-		image,
 		imageUrl,
 		json,
 		xml,
@@ -101,7 +37,6 @@ export default class OpenAI extends EventEmitter {
 		if (xml && json) throw new Error('Choose either XML or JSON, not both');
 		if (lastMessageId && typeof lastMessageId !== 'string') throw new Error('lastMessageId must be a string');
 		if (tools && (typeof tools !== 'object' || Array.isArray(tools))) throw new Error('tools must be an object');
-		if (image && imageUrl) throw new Error('Choose either image or imageUrl, not both');
 
 		const toolDefinitions = [];
 		const toolHandlers = {};
@@ -161,15 +96,11 @@ export default class OpenAI extends EventEmitter {
 			'lastMessageId': lastMessageId || null,
 		};
 
-		const uploadedImageUrl = image
-			? await uploadCloudinaryImageAsync(image, this.cloudinary)
-			: imageUrl;
-
-		let input = !uploadedImageUrl ? prompt : [{
+		let input = !imageUrl ? prompt : [{
 			'role': 'user',
 			'content': [
 				{'type': 'input_text', 'text': prompt},
-				{'type': 'input_image', 'image_url': uploadedImageUrl},
+				{'type': 'input_image', 'image_url': imageUrl},
 			],
 		}];
 
