@@ -331,7 +331,10 @@ export default class OpenAI extends EventEmitter {
 				message.status = 'running';
 				sendUpdate(message);
 				try {
-					const output = await handler(message.input || {});
+					const output = await handler(message.input || {}, progress => {
+						message.progress = progress;
+						sendUpdate(message);
+					});
 					message.output = output;
 					message.result = output;
 					message.status = 'completed';
@@ -345,6 +348,7 @@ export default class OpenAI extends EventEmitter {
 					message.error = err.message;
 					message.status = 'failed';
 					sendUpdate(message);
+					await chain;
 					throw err;
 				}
 			}
